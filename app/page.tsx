@@ -113,38 +113,91 @@ export default function SpeechToTasks() {
     }
   }
 
-  // Placeholder function for DeepGram API integration
   const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
-    // TODO: Integrate with DeepGram API
-    // For now, return a mock transcript
-    await new Promise((resolve) => setTimeout(resolve, 1000)) // Simulate API delay
-    return "Buy groceries tomorrow, finish project report by Friday, call dentist next week"
+    try {
+      const response = await fetch('https://api.deepgram.com/v1/listen', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY}`,
+          'Content-Type': 'audio/wav'
+        },
+        body: audioBlob
+      });
+
+      if (!response.ok) {
+        throw new Error(`Deepgram API error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result.results.channels[0].alternatives[0].transcript || '';
+    } catch (error) {
+      console.error('Error transcribing audio:', error);
+      throw new Error('Failed to transcribe audio. Please try again.');
+    }
   }
 
-  // Placeholder function for OpenRouter LLM integration
   const parseTasksFromTranscript = async (
     transcript: string,
   ): Promise<Omit<Task, "id" | "completed" | "createdAt">[]> => {
-    // TODO: Integrate with OpenRouter API (mistral-7b-instruct)
-    // For now, return mock parsed tasks
-    await new Promise((resolve) => setTimeout(resolve, 500)) // Simulate API delay
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.NEXT_PUBLIC_OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'openai/gpt-3.5-turbo',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a task parser. Extract individual tasks from the user's speech and return them as a JSON array. Each task should have:
+- description: A clear, actionable task description
+- dueDate: ISO date string (YYYY-MM-DD format)
 
-    const mockTasks = [
-      {
-        description: "Buy groceries",
-        dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split("T")[0], // tomorrow
-      },
-      {
-        description: "Finish project report",
-        dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split("T")[0], // Friday (5 days)
-      },
-      {
-        description: "Call dentist",
-        dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0], // next week
-      },
-    ]
+For relative dates, use these rules:
+- "today" = today's date
+- "tomorrow" = tomorrow's date  
+- "next week" = 7 days from today
+- "Friday", "Monday", etc. = next occurrence of that day
+- If no date mentioned, default to 7 days from today
 
-    return mockTasks
+Return ONLY a valid JSON array, no other text.
+
+Example input: "Buy groceries tomorrow and call dentist next week"
+Example output: [{"description": "Buy groceries", "dueDate": "2024-01-15"}, {"description": "Call dentist", "dueDate": "2024-01-21"}]`
+            },
+            {
+              role: 'user',
+              content: transcript
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 500
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenRouter API error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      const content = result.choices[0].message.content;
+      
+      const tasks = JSON.parse(content);
+      
+      if (!Array.isArray(tasks)) {
+        throw new Error('Invalid response format from LLM');
+      }
+
+      return tasks.map(task => ({
+        description: task.description || 'Untitled task',
+        dueDate: task.dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+      }));
+    } catch (error) {
+      console.error('Error parsing tasks:', error);
+      throw new Error('Failed to parse tasks from speech. Please try again.');
+    }
   }
 
   const processAudio = async (audioBlob: Blob) => {
